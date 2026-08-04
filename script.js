@@ -322,9 +322,59 @@ els.confirmMapping.addEventListener('click', () => {
   finishImport();
 });
 
+/* ---------------- OFX parsing ---------------- */
+
+function isOFX(text) {
+  return /OFXHEADER|<OFX>|<STMTTRN>/i.test(text.slice(0, 2000)) || /<STMTTRN>/i.test(text);
+}
+
+function parseOFXDate(raw) {
+  // formato OFX: AAAAMMDD[HHMMSS[.xxx[gmt offset]]]
+  const m = String(raw).match(/^(\d{4})(\d{2})(\d{2})/);
+  if (!m) return null;
+  const [, y, mo, d] = m;
+  return new Date(+y, +mo - 1, +d);
+}
+
+function parseOFX(text) {
+  const tx = [];
+  const blocks = text.match(/<STMTTRN>([\s\S]*?)<\/STMTTRN>/gi) || [];
+  for (const block of blocks) {
+    const get = (tag) => {
+      const m = block.match(new RegExp(`<${tag}>([^<\r\n]*)`, 'i'));
+      return m ? m[1].trim() : null;
+    };
+    const dateRaw = get('DTPOSTED');
+    const amtRaw = get('TRNAMT');
+    const memo = get('MEMO') || get('NAME') || '(sem descrição)';
+    const date = parseOFXDate(dateRaw);
+    const value = amtRaw != null ? parseFloat(amtRaw.replace(',', '.')) : NaN;
+    if (!date || isNaN(value)) continue;
+    tx.push({ date, desc: memo, value, type: value >= 0 ? 'in' : 'out', category: categorize(memo) });
+  }
+  tx.sort((a, b) => a.date - b.date);
+  return tx;
+}
+
 /* ---------------- Import flow ---------------- */
 
-function handleCSVText(text) {
+function handleFileText(text, filename) {
+  const looksLikeOFX = /\.ofx$/i.test(filename || '') || isOFX(text);
+  if (looksLikeOFX) {
+    state.headers = [];
+    state.rows = [];
+    state.mapping = { format: 'ofx' };
+    state.transactions = parseOFX(text);
+    if (!state.transactions.length) {
+      alert('Não encontrei lançamentos nesse OFX. Confira se o arquivo foi exportado corretamente do Sicredi.');
+      return;
+    }
+    els.mappingPanel.hidden = true;
+    renderAll();
+    persist({ format: 'ofx', text });
+    return;
+  }
+
   const { headers, rows } = parseCSV(text);
   state.headers = headers;
   state.rows = rows;
@@ -341,9 +391,12 @@ function handleCSVText(text) {
 function finishImport() {
   state.transactions = buildTransactions();
   renderAll();
-  localStorage.setItem(STORAGE_KEY, JSON.stringify({
-    headers: state.headers, rows: state.rows, mapping: state.mapping,
-  }));
+  persist({ format: 'csv', headers: state.headers, rows: state.rows, mapping: state.mapping });
+}
+
+function persist(data) {
+  try { localStorage.setItem(STORAGE_KEY, JSON.stringify(data)); }
+  catch (e) { /* storage cheia ou indisponível — segue sem salvar */ }
 }
 
 function loadFromStorage() {
@@ -351,10 +404,15 @@ function loadFromStorage() {
     const raw = localStorage.getItem(STORAGE_KEY);
     if (!raw) return;
     const data = JSON.parse(raw);
-    state.headers = data.headers;
-    state.rows = data.rows;
-    state.mapping = data.mapping;
-    finishImport();
+    if (data.format === 'ofx') {
+      state.transactions = parseOFX(data.text);
+      renderAll();
+    } else if (data.format === 'csv') {
+      state.headers = data.headers;
+      state.rows = data.rows;
+      state.mapping = data.mapping;
+      finishImport();
+    }
   } catch (e) { /* ignore corrupted storage */ }
 }
 
@@ -383,7 +441,7 @@ els.dropZone.addEventListener('drop', e => {
 
 function readFile(file) {
   const reader = new FileReader();
-  reader.onload = ev => handleCSVText(ev.target.result);
+  reader.onload = ev => handleFileText(ev.target.result, file.name);
   reader.onerror = () => alert('Não consegui ler o arquivo. Tente exportar o extrato novamente.');
   reader.readAsText(file, 'utf-8');
 }
