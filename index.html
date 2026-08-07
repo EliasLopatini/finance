@@ -5,6 +5,17 @@
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, maximum-scale=1">
 <title>Finanças</title>
 
+<script>
+  // Remove qualquer service worker/cache de versões antigas do app,
+  // que poderiam ficar "presas" servindo uma versão desatualizada.
+  if ('serviceWorker' in navigator) {
+    navigator.serviceWorker.getRegistrations().then(regs => regs.forEach(r => r.unregister()));
+  }
+  if ('caches' in window) {
+    caches.keys().then(names => names.forEach(n => caches.delete(n)));
+  }
+</script>
+
 <!-- PWA -->
 <meta name="theme-color" content="#B00020">
 <meta name="apple-mobile-web-app-capable" content="yes">
